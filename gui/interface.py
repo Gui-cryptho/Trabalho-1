@@ -17,6 +17,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import List, Optional
 import threading
+import time
 
 from core.graph import Graph
 from core.node import Node
@@ -327,26 +328,36 @@ class NavigationApp:
             return
 
         self._cancel_animation()
-        self._draw_grid()  # limpa marcações anteriores
+        self._draw_grid()
         self._collected_rewards = 0
 
         algo_key = ALGORITHMS.get(self._algo_var.get(), "astar")
         heuristic = self._get_heuristic()
 
         algorithm_map = {
-            "bfs":    BFS(self.graph),
-            "dfs":    DFS(self.graph),
+            "bfs": BFS(self.graph),
+            "dfs": DFS(self.graph),
             "greedy": Greedy(self.graph, heuristic),
-            "astar":  AStar(self.graph, heuristic),
+            "astar": AStar(self.graph, heuristic),
         }
 
         algo = algorithm_map[algo_key]
+
         self._status("⏳ Executando busca...")
         self._btn_search.config(state="disabled")
         self._running = True
 
         def run():
-            result = algo.search(self.graph.start_node, self.graph.goal_node)
+            start = time.perf_counter()
+
+            result = algo.search(
+                self.graph.start_node,
+                self.graph.goal_node
+            )
+
+            end = time.perf_counter()
+            result.elapsed_ms = (end - start) * 1000
+
             self.root.after(0, lambda: self._on_search_complete(result))
 
         threading.Thread(target=run, daemon=True).start()

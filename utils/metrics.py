@@ -59,7 +59,7 @@ class SearchResult:
             f"Recompensas : +{self.total_reward}",
             f"Custo líqui.: {self.net_cost:.0f}",
             f"Nós expand. : {self.nodes_expanded}",
-            f"Tempo       : {self.elapsed_ms:.2f} ms",
+            f"Tempo       : {self.elapsed_ms:.6f} ms",
         ]
         return "\n".join(lines)
 
