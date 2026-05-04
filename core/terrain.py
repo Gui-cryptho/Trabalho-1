@@ -1,61 +1,52 @@
-"""
-core/terrain.py
----------------
-Define os tipos de terreno do ambiente, seus custos de travessia
-e as propriedades visuais (cor) usadas na interface gráfica.
-"""
+# core/terrain.py — tipos de terreno, custos e cores da interface
 
 from enum import Enum
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class TerrainProperties:
-    """Propriedades imutáveis de um tipo de terreno."""
-    name: str
-    cost: int          # custo de travessia
-    color: str         # cor hexadecimal para a GUI
-    symbol: str        # símbolo para representação textual
+class PropriedadeTerreno:
+    # propriedades imutaveis de um tipo de terreno
+    nome:    str
+    custo:   int
+    cor:     str
+    simbolo: str
 
 
-class Terrain(Enum):
-    """
-    Enumeração dos tipos de terreno disponíveis no ambiente.
-    Cada valor carrega suas propriedades completas.
-    """
-    PLAIN   = TerrainProperties("Plano",   cost=1,  color="#A8D5A2", symbol=".")
-    SANDY   = TerrainProperties("Arenoso", cost=4,  color="#F5DEB3", symbol="~")
-    ROCKY   = TerrainProperties("Rochoso", cost=10, color="#A0A0A0", symbol="^")
-    SWAMP   = TerrainProperties("Pântano", cost=20, color="#6B8E6B", symbol="#")
-    WALL    = TerrainProperties("Parede",  cost=-1, color="#2C2C2C", symbol="X")  # intransponível
+class Terreno(Enum):
+    # cada valor carrega suas propriedades completas
+    PLANO    = PropriedadeTerreno("Plano",   custo=1,  cor="#A8D5A2", simbolo=".")
+    ARENOSO  = PropriedadeTerreno("Arenoso", custo=4,  cor="#F5DEB3", simbolo="~")
+    ROCHOSO  = PropriedadeTerreno("Rochoso", custo=10, cor="#A0A0A0", simbolo="^")
+    PANTANO  = PropriedadeTerreno("Pantano", custo=20, cor="#6B8E6B", simbolo="#")
+    PAREDE   = PropriedadeTerreno("Parede",  custo=-1, cor="#2C2C2C", simbolo="X")
 
     @property
-    def cost(self) -> int:
-        return self.value.cost
+    def custo(self) -> int:
+        return self.value.custo
 
     @property
-    def color(self) -> str:
-        return self.value.color
+    def cor(self) -> str:
+        return self.value.cor
 
     @property
-    def symbol(self) -> str:
-        return self.value.symbol
+    def simbolo(self) -> str:
+        return self.value.simbolo
 
     @property
-    def label(self) -> str:
-        return self.value.name
+    def rotulo(self) -> str:
+        return self.value.nome
 
-    def is_walkable(self) -> bool:
-        """Retorna True se o terreno pode ser atravessado."""
-        return self.cost > 0
+    def eh_transitavel(self) -> bool:
+        return self.custo > 0
 
 
-# Paleta de cores complementares para elementos especiais do mapa
-ELEMENT_COLORS = {
-    "agent":   "#FF6B35",   # agente (laranja vibrante)
-    "goal":    "#FFD700",   # objetivo/prêmio (dourado)
-    "reward":  "#00CED1",   # recompensas intermediárias (turquesa)
-    "path":    "#FF69B4",   # caminho encontrado (rosa)
-    "visited": "#DDA0DD",   # nós visitados/explorados (lilás)
-    "start":   "#FF6B35",   # ponto de partida
+# cores para elementos especiais do mapa
+CORES_ELEMENTOS = {
+    "agente":     "#FF6B35",
+    "objetivo":   "#FFD700",
+    "recompensa": "#00CED1",
+    "caminho":    "#FF69B4",
+    "visitado":   "#DDA0DD",
+    "inicio":     "#FF6B35",
 }

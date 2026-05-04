@@ -1,87 +1,61 @@
-"""
-core/node.py
-------------
-Define a classe Node, que representa cada célula (vértice) do grafo/grid.
-Armazena posição, tipo de terreno, recompensas e metadados de busca.
-"""
+# core/node.py — representa cada celula (vertice) do grafo
 
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
-from core.terrain import Terrain
+from core.terrain import Terreno
 
 
 @dataclass
-class Node:
-    """
-    Representa um vértice no grafo de navegação.
+class No:
+    # vertice do grafo: posicao, terreno, recompensa e metadados de busca
+    linha:      int
+    coluna:     int
+    terreno:    Terreno = Terreno.PLANO
+    recompensa: int     = 0
+    eh_inicio:  bool    = False
+    eh_objetivo: bool   = False
 
-    Atributos principais:
-        row, col   — posição no grid 2D
-        terrain    — tipo de terreno (determina o custo)
-        reward     — valor de recompensa coletável (0 = sem recompensa)
-        is_start   — marca o ponto inicial do agente
-        is_goal    — marca o objetivo final
-
-    Atributos de busca (preenchidos pelos algoritmos):
-        g_cost     — custo acumulado do início até este nó
-        h_cost     — estimativa heurística até o objetivo
-        parent     — nó predecessor no caminho encontrado
-    """
-    row: int
-    col: int
-    terrain: Terrain = Terrain.PLAIN
-    reward: int = 0
-    is_start: bool = False
-    is_goal: bool = False
-
-    # Campos de busca — resetados antes de cada execução
-    g_cost: float = field(default=float('inf'), compare=False, repr=False)
-    h_cost: float = field(default=0.0,          compare=False, repr=False)
-    parent: Optional['Node'] = field(default=None, compare=False, repr=False)
+    # campos de busca — resetados antes de cada execucao
+    custo_g: float         = field(default=float('inf'), compare=False, repr=False)
+    custo_h: float         = field(default=0.0,          compare=False, repr=False)
+    pai:     Optional['No'] = field(default=None,        compare=False, repr=False)
 
     def __hash__(self) -> int:
-        """Nós são identificados unicamente por sua posição."""
-        return hash((self.row, self.col))
+        return hash((self.linha, self.coluna))
 
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Node):
+    def __eq__(self, outro: object) -> bool:
+        if not isinstance(outro, No):
             return False
-        return self.row == other.row and self.col == other.col
+        return self.linha == outro.linha and self.coluna == outro.coluna
 
-    def __lt__(self, other: 'Node') -> bool:
-        """Permite uso em heapq pelo custo f = g + h."""
-        return self.f_cost < other.f_cost
-
-    @property
-    def f_cost(self) -> float:
-        """Custo total estimado: g (real) + h (heurística)."""
-        return self.g_cost + self.h_cost
+    def __lt__(self, outro: 'No') -> bool:
+        # permite uso em heapq pelo custo_f
+        return self.custo_f < outro.custo_f
 
     @property
-    def position(self) -> tuple[int, int]:
-        """Retorna a posição como tupla (row, col)."""
-        return (self.row, self.col)
+    def custo_f(self) -> float:
+        return self.custo_g + self.custo_h
 
     @property
-    def traversal_cost(self) -> int:
-        """Custo de entrar neste nó (definido pelo terreno)."""
-        return self.terrain.cost
+    def posicao(self) -> tuple[int, int]:
+        return (self.linha, self.coluna)
 
-    def is_walkable(self) -> bool:
-        """Retorna True se o nó pode ser visitado."""
-        return self.terrain.is_walkable()
+    @property
+    def custo_travessia(self) -> int:
+        return self.terreno.custo
 
-    def has_reward(self) -> bool:
-        """Retorna True se há uma recompensa neste nó."""
-        return self.reward > 0
+    def eh_transitavel(self) -> bool:
+        return self.terreno.eh_transitavel()
 
-    def reset_search_state(self) -> None:
-        """Limpa os metadados de busca para uma nova execução."""
-        self.g_cost = float('inf')
-        self.h_cost = 0.0
-        self.parent = None
+    def tem_recompensa(self) -> bool:
+        return self.recompensa > 0
+
+    def resetar_estado(self) -> None:
+        self.custo_g = float('inf')
+        self.custo_h = 0.0
+        self.pai     = None
 
     def __repr__(self) -> str:
-        marker = "S" if self.is_start else ("G" if self.is_goal else self.terrain.symbol)
-        return f"Node({self.row},{self.col})[{marker}]"
+        marcador = "S" if self.eh_inicio else ("G" if self.eh_objetivo else self.terreno.simbolo)
+        return f"No({self.linha},{self.coluna})[{marcador}]"

@@ -1,211 +1,165 @@
-"""
-core/graph.py
--------------
-Constrói e gerencia o grafo de navegação como um grid 2D.
-Responsável por gerar o mapa, definir adjacências (4 direções)
-e fornecer utilitários para acesso aos nós.
-"""
+# core/graph.py — constroi e gerencia o grafo de navegacao como grid 2D
 
 from __future__ import annotations
 import random
 from typing import List, Optional, Tuple
-from core.node import Node
-from core.terrain import Terrain
+from core.node import No
+from core.terrain import Terreno
 
-
-# Layout do mapa padrão (7×8 = 56 células, ≥ 30 vértices transitáveis)
-# Legenda de caracteres:
-#   '.' = Plano | '~' = Arenoso | '^' = Rochoso | '#' = Pântano
-#   'X' = Parede | 'S' = Início  | 'G' = Objetivo | '$' = Recompensa
-DEFAULT_MAP: List[str] = [
-    "S . . X . . . ~",
-    ". X . X . ^ ^ .",
+# legenda: '.'=Plano '~'=Arenoso '^'=Rochoso '#'=Pantano
+#          'X'=Parede 'S'=Inicio 'G'=Objetivo '$'=Recompensa
+MAPA_PADRAO: List[str] = [
+    "S . . X . . $ ~",
+    ". X . X . ^ ^ $",
     ". X . . . X . .",
     ". . ^ X $ . X G",
     "X . . . X . . .",
-    ". ~ ~ . . X . .",
+    ". ~ ~ $ . X . .",
     ". . X . $ ~ . .",
-    ". ^ . . . . ^ .",
+    ". ^ . . . $ ^ .",
 ]
 
-_CHAR_TO_TERRAIN = {
-    '.': Terrain.PLAIN,
-    '~': Terrain.SANDY,
-    '^': Terrain.ROCKY,
-    '#': Terrain.SWAMP,
-    'X': Terrain.WALL,
-    'S': Terrain.PLAIN,
-    'G': Terrain.PLAIN,
-    '$': Terrain.PLAIN,
+_CHAR_PARA_TERRENO = {
+    '.': Terreno.PLANO,
+    '~': Terreno.ARENOSO,
+    '^': Terreno.ROCHOSO,
+    '#': Terreno.PANTANO,
+    'X': Terreno.PAREDE,
+    'S': Terreno.PLANO,
+    'G': Terreno.PLANO,
+    '$': Terreno.PLANO,
 }
 
-# Movimentos válidos: cima, baixo, esquerda, direita
-_DIRECTIONS: List[Tuple[int, int]] = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+# movimentos validos: cima, baixo, esquerda, direita
+_DIRECOES: List[Tuple[int, int]] = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 
 
-class Graph:
-    """
-    Grafo representado como grid 2D de Nodes.
-
-    Responsabilidades:
-        - Construir o grid a partir de uma definição de mapa
-        - Calcular vizinhos válidos (4-conectividade)
-        - Expor nós de início e objetivo
-        - Resetar estado para novas buscas
-    """
+class Grafo:
+    # grafo representado como grid 2D de No
 
     def __init__(self) -> None:
-        self.rows: int = 0
-        self.cols: int = 0
-        self.nodes: List[List[Node]] = []
-        self.start_node: Optional[Node] = None
-        self.goal_node: Optional[Node] = None
-        self._reward_nodes: List[Node] = []
+        self.linhas:      int         = 0
+        self.colunas:     int         = 0
+        self.nos:         List[List[No]] = []
+        self.no_inicial:  Optional[No]   = None
+        self.no_objetivo: Optional[No]   = None
+        self._nos_recompensa: List[No]   = []
 
-    # ------------------------------------------------------------------
-    # Construção do grafo
-    # ------------------------------------------------------------------
+    # ── construcao ────────────────────────────────────────────────────────────
 
-    def build_from_map(self, map_def: List[str] = DEFAULT_MAP) -> None:
-        """
-        Constrói o grafo a partir de uma lista de strings.
-        Cada string representa uma linha; caracteres separados por espaço.
-        """
-        self.nodes = []
-        self._reward_nodes = []
-        self.start_node = None
-        self.goal_node = None
+    def construir_do_mapa(self, definicao: List[str] = MAPA_PADRAO) -> None:
+        # constroi o grafo a partir de uma lista de strings (chars separados por espaco)
+        self.nos = []
+        self._nos_recompensa = []
+        self.no_inicial  = None
+        self.no_objetivo = None
 
-        for r, line in enumerate(map_def):
-            chars = line.split()
-            row_nodes: List[Node] = []
+        for l, linha in enumerate(definicao):
+            chars = linha.split()
+            linha_nos: List[No] = []
             for c, ch in enumerate(chars):
-                terrain = _CHAR_TO_TERRAIN.get(ch, Terrain.PLAIN)
-                node = Node(row=r, col=c, terrain=terrain)
+                terreno = _CHAR_PARA_TERRENO.get(ch, Terreno.PLANO)
+                no = No(linha=l, coluna=c, terreno=terreno)
 
                 if ch == 'S':
-                    node.is_start = True
-                    self.start_node = node
+                    no.eh_inicio  = True
+                    self.no_inicial = no
                 elif ch == 'G':
-                    node.is_goal = True
-                    self.goal_node = node
+                    no.eh_objetivo  = True
+                    self.no_objetivo = no
                 elif ch == '$':
-                    node.reward = random.randint(5, 20)
-                    self._reward_nodes.append(node)
+                    no.recompensa = random.randint(5, 20)
+                    self._nos_recompensa.append(no)
 
-                row_nodes.append(node)
-            self.nodes.append(row_nodes)
+                linha_nos.append(no)
+            self.nos.append(linha_nos)
 
-        self.rows = len(self.nodes)
-        self.cols = len(self.nodes[0]) if self.nodes else 0
+        self.linhas  = len(self.nos)
+        self.colunas = len(self.nos[0]) if self.nos else 0
 
-        if not self.start_node or not self.goal_node:
-            raise ValueError("O mapa deve conter um ponto de início 'S' e um objetivo 'G'.")
+        if not self.no_inicial or not self.no_objetivo:
+            raise ValueError("O mapa precisa ter inicio 'S' e objetivo 'G'.")
 
-    def build_random(self, rows: int = 8, cols: int = 8,
-                     wall_prob: float = 0.15,
-                     reward_count: int = 4) -> None:
-        """
-        Gera um mapa aleatório com terrenos variados e obstáculos.
-        Garante que início e objetivo sejam sempre alcançáveis.
-        """
-        terrains = [Terrain.PLAIN, Terrain.PLAIN, Terrain.SANDY,
-                    Terrain.ROCKY, Terrain.SWAMP]
+    def construir_aleatorio(self, linhas: int = 8, colunas: int = 8,
+                             prob_parede: float = 0.15,
+                             qtd_recompensas: int = 5) -> None:
+        # gera mapa aleatorio garantindo que inicio e objetivo sejam alcancaveis
+        terrenos = [Terreno.PLANO, Terreno.PLANO, Terreno.ARENOSO,
+                    Terreno.ROCHOSO, Terreno.PANTANO]
 
-        self.nodes = []
-        self._reward_nodes = []
+        self.nos = []
+        self._nos_recompensa = []
 
-        for r in range(rows):
-            row_nodes: List[Node] = []
-            for c in range(cols):
-                if random.random() < wall_prob:
-                    t = Terrain.WALL
+        for l in range(linhas):
+            linha_nos: List[No] = []
+            for c in range(colunas):
+                if random.random() < prob_parede:
+                    t = Terreno.PAREDE
                 else:
-                    t = random.choice(terrains)
-                row_nodes.append(Node(row=r, col=c, terrain=t))
-            self.nodes.append(row_nodes)
+                    t = random.choice(terrenos)
+                linha_nos.append(No(linha=l, coluna=c, terreno=t))
+            self.nos.append(linha_nos)
 
-        self.rows = rows
-        self.cols = cols
+        self.linhas  = linhas
+        self.colunas = colunas
 
-        # Início (canto superior-esquerdo) e objetivo (canto inferior-direito)
-        self.nodes[0][0].terrain = Terrain.PLAIN
-        self.nodes[0][0].is_start = True
-        self.start_node = self.nodes[0][0]
+        self.nos[0][0].terreno  = Terreno.PLANO
+        self.nos[0][0].eh_inicio = True
+        self.no_inicial = self.nos[0][0]
 
-        self.nodes[rows-1][cols-1].terrain = Terrain.PLAIN
-        self.nodes[rows-1][cols-1].is_goal = True
-        self.goal_node = self.nodes[rows-1][cols-1]
+        self.nos[linhas-1][colunas-1].terreno    = Terreno.PLANO
+        self.nos[linhas-1][colunas-1].eh_objetivo = True
+        self.no_objetivo = self.nos[linhas-1][colunas-1]
 
-        # Distribui recompensas aleatórias em células caminháveis
-        walkable = [n for row in self.nodes for n in row
-                    if n.is_walkable() and not n.is_start and not n.is_goal]
-        for node in random.sample(walkable, min(reward_count, len(walkable))):
-            node.reward = random.randint(5, 20)
-            self._reward_nodes.append(node)
+        transitaveis = [n for linha in self.nos for n in linha
+                        if n.eh_transitavel() and not n.eh_inicio and not n.eh_objetivo]
+        for no in random.sample(transitaveis, min(qtd_recompensas, len(transitaveis))):
+            no.recompensa = random.randint(5, 20)
+            self._nos_recompensa.append(no)
 
-    # ------------------------------------------------------------------
-    # Acesso e navegação
-    # ------------------------------------------------------------------
+    # ── acesso e navegacao ────────────────────────────────────────────────────
 
-    def get_node(self, row: int, col: int) -> Optional[Node]:
-        """Retorna o nó na posição (row, col) ou None se fora dos limites."""
-        if 0 <= row < self.rows and 0 <= col < self.cols:
-            return self.nodes[row][col]
+    def obter_no(self, linha: int, coluna: int) -> Optional[No]:
+        if 0 <= linha < self.linhas and 0 <= coluna < self.colunas:
+            return self.nos[linha][coluna]
         return None
 
-    def get_neighbors(self, node: Node) -> List[Node]:
-        """
-        Retorna os vizinhos transitáveis de um nó (4 direções).
-        Paredes e células fora dos limites são excluídas.
-        """
-        neighbors: List[Node] = []
-        for dr, dc in _DIRECTIONS:
-            neighbor = self.get_node(node.row + dr, node.col + dc)
-            if neighbor and neighbor.is_walkable():
-                neighbors.append(neighbor)
-        return neighbors
+    def obter_vizinhos(self, no: No) -> List[No]:
+        # retorna vizinhos transitaveis nas 4 direcoes
+        vizinhos: List[No] = []
+        for dl, dc in _DIRECOES:
+            vizinho = self.obter_no(no.linha + dl, no.coluna + dc)
+            if vizinho and vizinho.eh_transitavel():
+                vizinhos.append(vizinho)
+        return vizinhos
 
-    def get_all_walkable(self) -> List[Node]:
-        """Retorna todos os nós transitáveis do grafo."""
-        return [n for row in self.nodes for n in row if n.is_walkable()]
+    def obter_transitaveis(self) -> List[No]:
+        return [n for linha in self.nos for n in linha if n.eh_transitavel()]
 
-    def get_reward_nodes(self) -> List[Node]:
-        """Retorna os nós que contêm recompensas."""
-        return [n for n in self._reward_nodes if n.has_reward()]
+    def obter_recompensas(self) -> List[No]:
+        return [n for n in self._nos_recompensa if n.tem_recompensa()]
 
-    # ------------------------------------------------------------------
-    # Gerenciamento de estado
-    # ------------------------------------------------------------------
+    # ── estado ────────────────────────────────────────────────────────────────
 
-    def reset_search_state(self) -> None:
-        """Limpa os metadados de busca em todos os nós."""
-        for row in self.nodes:
-            for node in row:
-                node.reset_search_state()
+    def resetar_estado_busca(self) -> None:
+        for linha in self.nos:
+            for no in linha:
+                no.resetar_estado()
 
-    def collect_reward(self, node: Node) -> int:
-        """
-        Coleta a recompensa de um nó (se houver) e retorna o valor.
-        A recompensa é zerada após a coleta.
-        """
-        value = node.reward
-        node.reward = 0
-        return value
+    def coletar_recompensa(self, no: No) -> int:
+        valor = no.recompensa
+        no.recompensa = 0
+        return valor
 
-    def reset_rewards(self) -> None:
-        """
-        Restaura as recompensas de todos os nós (útil para reset do mapa).
-        """
-        for node in self._reward_nodes:
-            node.reward = random.randint(5, 20)
+    def resetar_recompensas(self) -> None:
+        for no in self._nos_recompensa:
+            no.recompensa = random.randint(5, 20)
 
-    def vertex_count(self) -> int:
-        """Retorna o número total de vértices transitáveis."""
-        return len(self.get_all_walkable())
+    def contar_vertices(self) -> int:
+        return len(self.obter_transitaveis())
 
     def __repr__(self) -> str:
-        lines = []
-        for row in self.nodes:
-            lines.append(" ".join(repr(n)[5:12] for n in row))
-        return f"Graph({self.rows}×{self.cols}):\n" + "\n".join(lines)
+        linhas_txt = []
+        for linha in self.nos:
+            linhas_txt.append(" ".join(repr(n)[3:10] for n in linha))
+        return f"Grafo({self.linhas}x{self.colunas}):\n" + "\n".join(linhas_txt)

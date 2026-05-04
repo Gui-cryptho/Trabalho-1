@@ -1,88 +1,74 @@
-"""
-algorithms/dfs.py
-------------------
-Busca em Profundidade (Depth-First Search).
-
-Características:
-    - Explora um ramo até o fim antes de retroceder (LIFO)
-    - NÃO garante caminho ótimo (nem em passos nem em custo)
-    - Não usa heurística
-    - Detecta becos sem saída naturalmente via backtracking
-    - Memória mais eficiente que BFS em grafos densos
-    - Complexidade: O(V + E)
-"""
+# algorithms/dfs.py — Busca em Profundidade (DFS)
+# explora um ramo ate o fim antes de retroceder (LIFO)
+# nao garante caminho otimo; detecta becos sem saida via backtracking
+# busca cega: coleta recompensas de todos os nos visitados durante exploracao
 
 from typing import List, Tuple, Set
-from core.graph import Graph
-from core.node import Node
-from utils.metrics import Metrics, SearchResult
+from core.graph import Grafo
+from core.node import No
+from utils.metrics import Metricas, ResultadoBusca
 
 
-class DFS:
-    """Implementação de Busca em Profundidade (iterativa com pilha explícita)."""
+class BuscaProfundidade:
 
-    NAME = "DFS (Profundidade)"
+    NOME = "DFS (Profundidade)"
 
-    def __init__(self, graph: Graph) -> None:
-        self.graph = graph
+    def __init__(self, grafo: Grafo) -> None:
+        self.grafo = grafo
 
-    def search(self, start: Node, goal: Node) -> SearchResult:
-        """
-        Executa DFS do nó start até goal.
-        Usa pilha explícita (iterativa) para evitar estouro de recursão
-        em grafos grandes.
-        """
-        self.graph.reset_search_state()
-        metrics = Metrics(self.NAME)
+    def buscar(self, inicio: No, objetivo: No) -> ResultadoBusca:
+        self.grafo.resetar_estado_busca()
+        metricas = Metricas(self.NOME)
+        with metricas.medir():
+            resultado = self._executar(inicio, objetivo, metricas)
+        resultado.tempo_ms = metricas._tempo_decorrido
+        return resultado
 
-        with metrics.measure():
-            result = self._run(start, goal, metrics)
+    def _executar(self, inicio: No, objetivo: No, metricas: Metricas) -> ResultadoBusca:
+        pilha:           List[No] = [inicio]
+        visitados:       Set[No]  = set()
+        ordem_visitados: List[No] = []
+        recompensa_total: int     = 0
 
-        return result
+        inicio.custo_g = 0.0
 
-    def _run(self, start: Node, goal: Node, metrics: Metrics) -> SearchResult:
-        stack: List[Node] = [start]
-        visited: Set[Node] = set()
-        visited_order: List[Node] = []
+        while pilha:
+            atual = pilha.pop()
 
-        start.g_cost = 0.0
-
-        while stack:
-            current = stack.pop()
-
-            if current in visited:
+            if atual in visitados:
                 continue
 
-            visited.add(current)
-            metrics.expand_node()
-            visited_order.append(current)
+            visitados.add(atual)
+            metricas.expandir_no()
+            ordem_visitados.append(atual)
 
-            if current == goal:
-                path, cost, reward = self._reconstruct(start, goal)
-                return metrics.build_result(path, visited_order, cost, reward, found=True)
+            # busca cega coleta recompensa de qualquer no visitado
+            if atual.tem_recompensa():
+                recompensa_total += atual.recompensa
 
-            # Empilha vizinhos em ordem reversa para manter ordem natural de exploração
-            for neighbor in reversed(self.graph.get_neighbors(current)):
-                if neighbor not in visited:
-                    neighbor.parent = current
-                    neighbor.g_cost = current.g_cost + neighbor.traversal_cost
-                    stack.append(neighbor)
+            if atual == objetivo:
+                caminho, custo = self._reconstruir(inicio, objetivo)
+                return metricas.construir_resultado(caminho, ordem_visitados, custo, recompensa_total, encontrado=True)
 
-        return metrics.build_result([], visited_order, 0, 0, found=False,
-                                    message="Beco sem saída — nenhum caminho encontrado.")
+            # empilha em ordem reversa para manter ordem natural de exploracao
+            for vizinho in reversed(self.grafo.obter_vizinhos(atual)):
+                if vizinho not in visitados:
+                    vizinho.pai     = atual
+                    vizinho.custo_g = atual.custo_g + vizinho.custo_travessia
+                    pilha.append(vizinho)
 
-    def _reconstruct(self, start: Node, goal: Node) -> Tuple[List[Node], float, int]:
-        """Reconstrói o caminho seguindo os ponteiros parent."""
-        path: List[Node] = []
-        current: Node = goal
-        total_cost: float = 0.0
-        total_reward: int = 0
+        return metricas.construir_resultado([], ordem_visitados, 0, 0, encontrado=False,
+                                            mensagem="Beco sem saida — nenhum caminho encontrado.")
 
-        while current is not None:
-            path.append(current)
-            total_cost += current.traversal_cost if current != start else 0
-            total_reward += current.reward
-            current = current.parent
+    def _reconstruir(self, inicio: No, objetivo: No) -> Tuple[List[No], float]:
+        caminho:     List[No] = []
+        atual:       No       = objetivo
+        custo_total: float    = 0.0
 
-        path.reverse()
-        return path, total_cost, total_reward
+        while atual is not None:
+            caminho.append(atual)
+            custo_total += atual.custo_travessia if atual != inicio else 0
+            atual = atual.pai
+
+        caminho.reverse()
+        return caminho, custo_total

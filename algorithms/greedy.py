@@ -1,96 +1,79 @@
-"""
-algorithms/greedy.py
----------------------
-Busca Gulosa (Greedy Best-First Search).
-
-Características:
-    - Sempre expande o nó com MENOR heurística h(n) (ignora g)
-    - Rápida, mas NÃO garante caminho ótimo
-    - Usa fila de prioridade (min-heap) ordenada por h(n)
-    - Pode falhar em encontrar o caminho ótimo ao ignorar o custo real
-    - Boa para exploração rápida quando a heurística é confiável
-"""
+# algorithms/greedy.py — Busca Gulosa (Greedy Best-First Search)
+# expande sempre o no com menor h(n) — rapida mas nao garante otimo
+# algoritmos com heuristica coletam recompensas apenas no caminho final
 
 import heapq
 from typing import List, Tuple, Callable, Set
-from core.graph import Graph
-from core.node import Node
-from utils.metrics import Metrics, SearchResult
-from utils.heuristics import DEFAULT_HEURISTIC
+from core.graph import Grafo
+from core.node import No
+from utils.metrics import Metricas, ResultadoBusca
+from utils.heuristics import HEURISTICA_PADRAO
 
 
-class Greedy:
-    """Implementação de Busca Gulosa com heurística configurável."""
+class BuscaGulosa:
 
-    NAME = "Greedy (Gulosa)"
+    NOME = "Greedy (Gulosa)"
 
-    def __init__(self, graph: Graph,
-                 heuristic: Callable[[Node, Node], float] = DEFAULT_HEURISTIC) -> None:
-        self.graph = graph
-        self.heuristic = heuristic
+    def __init__(self, grafo: Grafo,
+                 heuristica: Callable[[No, No], float] = HEURISTICA_PADRAO) -> None:
+        self.grafo     = grafo
+        self.heuristica = heuristica
 
-    def search(self, start: Node, goal: Node) -> SearchResult:
-        """
-        Executa Greedy do nó start até goal usando a heurística configurada.
-        A fila de prioridade é ordenada exclusivamente por h(n).
-        """
-        self.graph.reset_search_state()
-        metrics = Metrics(self.NAME)
+    def buscar(self, inicio: No, objetivo: No) -> ResultadoBusca:
+        self.grafo.resetar_estado_busca()
+        metricas = Metricas(self.NOME)
+        with metricas.medir():
+            resultado = self._executar(inicio, objetivo, metricas)
+        resultado.tempo_ms = metricas._tempo_decorrido
+        return resultado
 
-        with metrics.measure():
-            result = self._run(start, goal, metrics)
+    def _executar(self, inicio: No, objetivo: No, metricas: Metricas) -> ResultadoBusca:
+        inicio.custo_h = self.heuristica(inicio, objetivo)
+        inicio.custo_g = 0.0
 
-        return result
+        # heap ordenado por custo_h: (h, contador, no)
+        contador = 0
+        fila_prioridade: List[Tuple[float, int, No]] = [(inicio.custo_h, contador, inicio)]
+        visitados:        Set[No]  = set()
+        ordem_visitados:  List[No] = []
 
-    def _run(self, start: Node, goal: Node, metrics: Metrics) -> SearchResult:
-        # Calcula h do início
-        start.h_cost = self.heuristic(start, goal)
-        start.g_cost = 0.0
+        while fila_prioridade:
+            _, _, atual = heapq.heappop(fila_prioridade)
 
-        # heap ordenado por h_cost: (h, counter, node)
-        # counter serve como desempate determinístico
-        counter = 0
-        heap: List[Tuple[float, int, Node]] = [(start.h_cost, counter, start)]
-        visited: Set[Node] = set()
-        visited_order: List[Node] = []
-
-        while heap:
-            _, _, current = heapq.heappop(heap)
-
-            if current in visited:
+            if atual in visitados:
                 continue
 
-            visited.add(current)
-            metrics.expand_node()
-            visited_order.append(current)
+            visitados.add(atual)
+            metricas.expandir_no()
+            ordem_visitados.append(atual)
 
-            if current == goal:
-                path, cost, reward = self._reconstruct(start, goal)
-                return metrics.build_result(path, visited_order, cost, reward, found=True)
+            if atual == objetivo:
+                caminho, custo, recompensa = self._reconstruir(inicio, objetivo)
+                return metricas.construir_resultado(caminho, ordem_visitados, custo, recompensa, encontrado=True)
 
-            for neighbor in self.graph.get_neighbors(current):
-                if neighbor not in visited:
-                    new_g = current.g_cost + neighbor.traversal_cost
-                    if new_g < neighbor.g_cost:
-                        neighbor.g_cost = new_g
-                        neighbor.parent = current
-                        neighbor.h_cost = self.heuristic(neighbor, goal)
-                        counter += 1
-                        heapq.heappush(heap, (neighbor.h_cost, counter, neighbor))
+            for vizinho in self.grafo.obter_vizinhos(atual):
+                if vizinho not in visitados:
+                    novo_g = atual.custo_g + vizinho.custo_travessia
+                    if novo_g < vizinho.custo_g:
+                        vizinho.custo_g = novo_g
+                        vizinho.pai     = atual
+                        vizinho.custo_h = self.heuristica(vizinho, objetivo)
+                        contador += 1
+                        heapq.heappush(fila_prioridade, (vizinho.custo_h, contador, vizinho))
 
-        return metrics.build_result([], visited_order, 0, 0, found=False)
+        return metricas.construir_resultado([], ordem_visitados, 0, 0, encontrado=False)
 
-    def _reconstruct(self, start: Node, goal: Node) -> Tuple[List[Node], float, int]:
-        path: List[Node] = []
-        current: Node = goal
-        total_cost: float = 0.0
-        total_reward: int = 0
+    def _reconstruir(self, inicio: No, objetivo: No) -> Tuple[List[No], float, int]:
+        caminho:          List[No] = []
+        atual:            No       = objetivo
+        custo_total:      float    = 0.0
+        recompensa_total: int      = 0
 
-        while current is not None:
-            path.append(current)
-            total_cost += current.traversal_cost if current != start else 0
-            total_reward += current.reward
-            current = current.parent
+        while atual is not None:
+            caminho.append(atual)
+            custo_total      += atual.custo_travessia if atual != inicio else 0
+            recompensa_total += atual.recompensa
+            atual = atual.pai
 
-        path.reverse()
-        return path, total_cost, total_reward
+        caminho.reverse()
+        return caminho, custo_total, recompensa_total

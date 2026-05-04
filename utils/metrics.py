@@ -1,10 +1,4 @@
-"""
-utils/metrics.py
------------------
-Coleta e armazena métricas de desempenho de uma execução de busca.
-Fornece um contexto (with statement) para medir o tempo automaticamente
-e uma dataclass para transportar os resultados entre camadas.
-"""
+# utils/metrics.py — coleta metricas de desempenho de uma execucao de busca
 
 import time
 from dataclasses import dataclass, field
@@ -13,106 +7,78 @@ from contextlib import contextmanager
 
 
 @dataclass
-class SearchResult:
-    """
-    Resultado completo de uma execução de algoritmo de busca.
-
-    Campos:
-        path          — sequência de nós do início ao objetivo (vazia se não encontrado)
-        visited_order — ordem em que os nós foram expandidos (para animação)
-        total_cost    — custo acumulado real do caminho
-        total_reward  — soma das recompensas coletadas ao longo do caminho
-        nodes_expanded — quantos nós foram retirados da fila/pilha
-        elapsed_ms    — tempo de execução em milissegundos
-        algorithm     — nome do algoritmo utilizado
-        found         — True se um caminho foi encontrado
-        message       — mensagem descritiva (erro, beco sem saída, etc.)
-    """
-    path: List = field(default_factory=list)
-    visited_order: List = field(default_factory=list)
-    total_cost: float = 0.0
-    total_reward: int = 0
-    nodes_expanded: int = 0
-    elapsed_ms: float = 0.0
-    algorithm: str = ""
-    found: bool = False
-    message: str = ""
+class ResultadoBusca:
+    # resultado completo de uma execucao de algoritmo de busca
+    caminho:         List = field(default_factory=list)
+    nos_visitados:   List = field(default_factory=list)
+    custo_total:     float = 0.0
+    recompensa_total: int  = 0
+    nos_expandidos:  int   = 0
+    tempo_ms:        float = 0.0
+    algoritmo:       str   = ""
+    encontrado:      bool  = False
+    mensagem:        str   = ""
 
     @property
-    def net_cost(self) -> float:
-        """Custo líquido: custo do caminho descontando recompensas coletadas."""
-        return max(0.0, self.total_cost - self.total_reward)
+    def custo_liquido(self) -> float:
+        return max(0.0, self.custo_total - self.recompensa_total)
 
     @property
-    def path_length(self) -> int:
-        """Número de nós no caminho (incluindo início e objetivo)."""
-        return len(self.path)
+    def tamanho_caminho(self) -> int:
+        return len(self.caminho)
 
-    def summary(self) -> str:
-        """Retorna um resumo formatado para exibição na GUI."""
-        if not self.found:
-            return f"[{self.algorithm}] {self.message}"
-        lines = [
-            f"Algoritmo   : {self.algorithm}",
-            f"Caminho     : {self.path_length} nós",
-            f"Custo total : {self.total_cost:.0f}",
-            f"Recompensas : +{self.total_reward}",
-            f"Custo líqui.: {self.net_cost:.0f}",
-            f"Nós expand. : {self.nodes_expanded}",
-            f"Tempo       : {self.elapsed_ms:.6f} ms",
+    def resumo(self) -> str:
+        if not self.encontrado:
+            return f"[{self.algoritmo}] {self.mensagem}"
+        linhas = [
+            f"Algoritmo   : {self.algoritmo}",
+            f"Caminho     : {self.tamanho_caminho} nos",
+            f"Custo total : {self.custo_total:.0f}",
+            f"Recompensas : +{self.recompensa_total}",
+            f"Custo liqui.: {self.custo_liquido:.0f}",
+            f"Nos expand. : {self.nos_expandidos}",
+            f"Tempo       : {self.tempo_ms:.6f} ms",
         ]
-        return "\n".join(lines)
+        return "\n".join(linhas)
 
 
-class Metrics:
-    """
-    Contexto de medição de tempo para uma busca.
+class Metricas:
+    # contexto de medicao de tempo para uma busca
 
-    Uso:
-        metrics = Metrics("A*")
-        with metrics.measure():
-            # executa o algoritmo
-            ...
-        result = metrics.build_result(path, visited, cost, reward)
-    """
-
-    def __init__(self, algorithm_name: str) -> None:
-        self.algorithm_name = algorithm_name
-        self._start_time: Optional[float] = None
-        self._elapsed_ms: float = 0.0
-        self.nodes_expanded: int = 0
+    def __init__(self, nome_algoritmo: str) -> None:
+        self.nome_algoritmo  = nome_algoritmo
+        self._tempo_inicio:  Optional[float] = None
+        self._tempo_decorrido: float = 0.0
+        self.nos_expandidos: int = 0
 
     @contextmanager
-    def measure(self):
-        """Gerenciador de contexto que cronometra o bloco interno."""
-        self._start_time = time.perf_counter()
+    def medir(self):
+        self._tempo_inicio = time.perf_counter()
         try:
             yield self
         finally:
-            self._elapsed_ms = (time.perf_counter() - self._start_time) * 1000
+            self._tempo_decorrido = (time.perf_counter() - self._tempo_inicio) * 1000
 
-    def expand_node(self) -> None:
-        """Incrementa o contador de nós expandidos."""
-        self.nodes_expanded += 1
+    def expandir_no(self) -> None:
+        self.nos_expandidos += 1
 
-    def build_result(
+    def construir_resultado(
         self,
-        path: List,
-        visited_order: List,
-        total_cost: float,
-        total_reward: int,
-        found: bool,
-        message: str = "",
-    ) -> SearchResult:
-        """Constrói o SearchResult com todas as métricas coletadas."""
-        return SearchResult(
-            path=path,
-            visited_order=visited_order,
-            total_cost=total_cost,
-            total_reward=total_reward,
-            nodes_expanded=self.nodes_expanded,
-            elapsed_ms=self._elapsed_ms,
-            algorithm=self.algorithm_name,
-            found=found,
-            message=message or ("Caminho encontrado!" if found else "Caminho não encontrado."),
+        caminho: List,
+        nos_visitados: List,
+        custo_total: float,
+        recompensa_total: int,
+        encontrado: bool,
+        mensagem: str = "",
+    ) -> ResultadoBusca:
+        return ResultadoBusca(
+            caminho=caminho,
+            nos_visitados=nos_visitados,
+            custo_total=custo_total,
+            recompensa_total=recompensa_total,
+            nos_expandidos=self.nos_expandidos,
+            tempo_ms=self._tempo_decorrido,
+            algoritmo=self.nome_algoritmo,
+            encontrado=encontrado,
+            mensagem=mensagem or ("Caminho encontrado!" if encontrado else "Caminho nao encontrado."),
         )

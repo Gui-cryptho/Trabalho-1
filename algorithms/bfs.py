@@ -1,82 +1,68 @@
-"""
-algorithms/bfs.py
-------------------
-Busca em Largura (Breadth-First Search).
-
-Características:
-    - Explora nós camada por camada (FIFO)
-    - Garante o caminho com MENOR NÚMERO DE PASSOS (não necessariamente menor custo)
-    - Não usa heurística
-    - Completo: sempre encontra a solução se ela existir
-    - Complexidade: O(V + E)
-"""
+# algorithms/bfs.py — Busca em Largura (BFS)
+# explora nos camada por camada (FIFO), garante menor numero de passos
+# busca cega: coleta recompensas de todos os nos visitados durante exploracao
 
 from collections import deque
 from typing import List, Tuple
-from core.graph import Graph
-from core.node import Node
-from utils.metrics import Metrics, SearchResult
+from core.graph import Grafo
+from core.node import No
+from utils.metrics import Metricas, ResultadoBusca
 
 
-class BFS:
-    """Implementação de Busca em Largura."""
+class BuscaLargura:
 
-    NAME = "BFS (Largura)"
+    NOME = "BFS (Largura)"
 
-    def __init__(self, graph: Graph) -> None:
-        self.graph = graph
+    def __init__(self, grafo: Grafo) -> None:
+        self.grafo = grafo
 
-    def search(self, start: Node, goal: Node) -> SearchResult:
-        """
-        Executa BFS do nó start até goal.
+    def buscar(self, inicio: No, objetivo: No) -> ResultadoBusca:
+        self.grafo.resetar_estado_busca()
+        metricas = Metricas(self.NOME)
+        with metricas.medir():
+            resultado = self._executar(inicio, objetivo, metricas)
+        resultado.tempo_ms = metricas._tempo_decorrido
+        return resultado
 
-        Retorna SearchResult com o caminho, custo, recompensas e métricas.
-        """
-        self.graph.reset_search_state()
-        metrics = Metrics(self.NAME)
+    def _executar(self, inicio: No, objetivo: No, metricas: Metricas) -> ResultadoBusca:
+        fila:           deque[No] = deque([inicio])
+        visitados:      set[No]   = {inicio}
+        ordem_visitados: List[No] = []
+        recompensa_total: int     = 0
 
-        with metrics.measure():
-            result = self._run(start, goal, metrics)
+        inicio.custo_g = 0.0
 
-        return result
+        while fila:
+            atual = fila.popleft()
+            metricas.expandir_no()
+            ordem_visitados.append(atual)
 
-    def _run(self, start: Node, goal: Node, metrics: Metrics) -> SearchResult:
-        queue: deque[Node] = deque([start])
-        visited: set[Node] = {start}
-        visited_order: List[Node] = []
+            # busca cega coleta recompensa de qualquer no visitado
+            if atual.tem_recompensa():
+                recompensa_total += atual.recompensa
 
-        start.g_cost = 0.0
+            if atual == objetivo:
+                caminho, custo = self._reconstruir(inicio, objetivo)
+                return metricas.construir_resultado(caminho, ordem_visitados, custo, recompensa_total, encontrado=True)
 
-        while queue:
-            current = queue.popleft()
-            metrics.expand_node()
-            visited_order.append(current)
+            for vizinho in self.grafo.obter_vizinhos(atual):
+                if vizinho not in visitados:
+                    visitados.add(vizinho)
+                    vizinho.pai     = atual
+                    vizinho.custo_g = atual.custo_g + vizinho.custo_travessia
+                    fila.append(vizinho)
 
-            if current == goal:
-                path, cost, reward = self._reconstruct(start, goal)
-                return metrics.build_result(path, visited_order, cost, reward, found=True)
+        return metricas.construir_resultado([], ordem_visitados, 0, 0, encontrado=False)
 
-            for neighbor in self.graph.get_neighbors(current):
-                if neighbor not in visited:
-                    visited.add(neighbor)
-                    neighbor.parent = current
-                    neighbor.g_cost = current.g_cost + neighbor.traversal_cost
-                    queue.append(neighbor)
+    def _reconstruir(self, inicio: No, objetivo: No) -> Tuple[List[No], float]:
+        caminho:     List[No] = []
+        atual:       No       = objetivo
+        custo_total: float    = 0.0
 
-        return metrics.build_result([], visited_order, 0, 0, found=False)
+        while atual is not None:
+            caminho.append(atual)
+            custo_total += atual.custo_travessia if atual != inicio else 0
+            atual = atual.pai
 
-    def _reconstruct(self, start: Node, goal: Node) -> Tuple[List[Node], float, int]:
-        """Reconstrói o caminho seguindo os ponteiros parent do objetivo até o início."""
-        path: List[Node] = []
-        current: Node = goal
-        total_cost: float = 0.0
-        total_reward: int = 0
-
-        while current is not None:
-            path.append(current)
-            total_cost += current.traversal_cost if current != start else 0
-            total_reward += current.reward
-            current = current.parent
-
-        path.reverse()
-        return path, total_cost, total_reward
+        caminho.reverse()
+        return caminho, custo_total

@@ -1,530 +1,690 @@
-"""
-gui/interface.py
------------------
-Interface gráfica principal do sistema de navegação.
-Usa Tkinter com Canvas para renderizar o grid, animar o agente
-e exibir métricas de desempenho dos algoritmos de busca.
+# gui/interface.py — interface grafica com Pygame e pixel art (Kenney Tiny Dungeon CC0)
+# estetica de RPG retro com tiles escalados 4x, fonte bitmap e menus estilizados
 
-Responsabilidades:
-    - Renderizar o mapa com cores por terreno
-    - Controles: seleção de algoritmo, mapa aleatório, reset
-    - Animar o agente percorrendo o caminho encontrado
-    - Exibir painel de métricas (custo, tempo, nós expandidos)
-    - Destacar caminho, nós visitados e recompensas coletadas
-"""
-
-import tkinter as tk
-from tkinter import ttk, messagebox
+import sys, os, math, threading
+import pygame
 from typing import List, Optional
-import threading
-import time
 
-from core.graph import Graph
-from core.node import Node
-from core.terrain import Terrain, ELEMENT_COLORS
-from algorithms.bfs import BFS
-from algorithms.dfs import DFS
-from algorithms.greedy import Greedy
-from algorithms.astar import AStar
-from utils.metrics import SearchResult
-from utils.heuristics import manhattan, reward_adjusted
+from core.graph import Grafo
+from core.node import No
+from core.terrain import Terreno
+from algorithms.bfs import BuscaLargura
+from algorithms.dfs import BuscaProfundidade
+from algorithms.greedy import BuscaGulosa
+from algorithms.astar import BuscaAEstrela
+from utils.metrics import ResultadoBusca
+from utils.heuristics import manhattan, euclidiana, criar_heuristica_proxima
+from utils.audio import GerenciadorAudio
 
+# ── caminhos ──────────────────────────────────────────────────────────────────
+_RAIZ        = os.path.dirname(os.path.dirname(__file__))
+CAMINHO_FONT = os.path.join(_RAIZ, 'assets', 'fonts',   'PressStart2P.ttf')
+DIR_TILES    = os.path.join(_RAIZ, 'assets', 'sprites', 'Tiles')
 
-# ── Configurações visuais ───────────────────────────────────────────────────
-CELL_SIZE    = 72   # tamanho de cada célula do grid em pixels
-CELL_PAD     = 3    # espaçamento interno da célula
-ANIM_DELAY   = 120  # delay entre frames da animação (ms)
-VISIT_DELAY  = 18   # delay ao mostrar nós visitados (ms)
+# ── dimensoes base ────────────────────────────────────────────────────────────
+LARG_JANELA, ALT_JANELA = 1440, 920
+LARG_PAINEL = 300
+ALT_TOPO    = 54
+ALT_STATUS  = 36
+TAM_TILE    = 96   # tiles 16x16 escalados 6x
 
-ALGORITHMS = {
-    "BFS (Largura)":    "bfs",
-    "DFS (Profundidade)": "dfs",
-    "Greedy (Gulosa)":  "greedy",
-    "A* (A estrela)":   "astar",
+# ── animacao ──────────────────────────────────────────────────────────────────
+MS_VISITA = 22
+MS_PASSO  = 160
+
+# ── ids dos tiles (Kenney Tiny Dungeon) ───────────────────────────────────────
+TILES = {
+    'plano':      1,
+    'arenoso':   30,
+    'rochoso':   24,
+    'pantano':   20,
+    'parede':    38,
+    'agente':    84,
+    'objetivo':  90,
+    'recompensa': 116,
+    'inicio':    85,
 }
 
-TERRAIN_LABELS = {
-    Terrain.PLAIN: "Plano\ncusto 1",
-    Terrain.SANDY: "Arenoso\ncusto 4",
-    Terrain.ROCKY: "Rochoso\ncusto 10",
-    Terrain.SWAMP: "Pântano\ncusto 20",
-    Terrain.WALL:  "Parede",
+# ── paleta de cores ───────────────────────────────────────────────────────────
+C_FUNDO  = (10,   8,  18)
+C_PAINEL = (14,  12,  24)
+C_ESCURO = ( 6,   4,  12)
+C_OURO   = (210, 165,  45)
+C_OURO2  = (245, 205,  80)
+C_TEXTO  = (225, 215, 185)
+C_OPACO  = (130, 120, 100)
+C_VERDE  = (100, 200, 100)
+C_VERM   = (220,  80,  80)
+C_HOVER  = (100, 140, 210)
+
+LISTA_ALGORITMOS = ["BFS (Largura)", "DFS (Profundidade)", "Greedy (Gulosa)", "A* (A estrela)"]
+LISTA_HEURISTICAS = ["Manhattan", "Euclidiana", "Recompensas proximas"]
+
+
+class EntradaTexto:
+    # campo de texto para digitar coordenadas (linha,col)
+
+    def __init__(self, x, y, larg, alt, placeholder="linha,col"):
+        self.rect        = pygame.Rect(x, y, larg, alt)
+        self.texto       = ""
+        self.placeholder = placeholder
+        self.ativo       = False
+        self._fonte      = None
+
+    def definir_fonte(self, f):
+        self._fonte = f
+
+    def processar_evento(self, evento) -> bool:
+        # retorna True quando o usuario confirma com Enter
+        if evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1:
+            self.ativo = self.rect.collidepoint(evento.pos)
+
+        if evento.type == pygame.KEYDOWN and self.ativo:
+            if evento.key == pygame.K_BACKSPACE:
+                self.texto = self.texto[:-1]
+                return False
+            if evento.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                return True
+            if evento.unicode in "0123456789," and len(self.texto) < 7:
+                self.texto += evento.unicode
+
+        return False
+
+    def desenhar(self, tela):
+        borda = C_OURO if self.ativo else C_OPACO
+        pygame.draw.rect(tela, C_ESCURO, self.rect, border_radius=3)
+        pygame.draw.rect(tela, borda,    self.rect, 1, border_radius=3)
+
+        if self._fonte:
+            exibir = self.texto if self.texto else self.placeholder
+            cor    = C_TEXTO   if self.texto else C_OPACO
+            t = self._fonte.render(exibir, True, cor)
+            tela.blit(t, t.get_rect(midleft=(self.rect.x + 6, self.rect.centery)))
+
+            # cursor piscante
+            if self.ativo and pygame.time.get_ticks() % 900 < 450:
+                cx = self.rect.x + 6 + (self._fonte.size(self.texto)[0] if self.texto else 0) + 1
+                pygame.draw.rect(tela, C_TEXTO, (cx, self.rect.y + 4, 2, self.rect.height - 8))
+
+
+ID_TILE_TERRENO = {
+    Terreno.PLANO:   TILES['plano'],
+    Terreno.ARENOSO: TILES['arenoso'],
+    Terreno.ROCHOSO: TILES['rochoso'],
+    Terreno.PANTANO: TILES['pantano'],
+    Terreno.PAREDE:  TILES['parede'],
 }
 
-FONT_MAIN  = ("Segoe UI", 10)
-FONT_BOLD  = ("Segoe UI", 10, "bold")
-FONT_TITLE = ("Segoe UI", 13, "bold")
-FONT_MONO  = ("Consolas", 10)
-FONT_CELL  = ("Segoe UI", 8)
 
-BG_APP    = "#1E1E2E"
-BG_PANEL  = "#2A2A3E"
-BG_CARD   = "#313145"
-FG_TEXT   = "#CDD6F4"
-FG_MUTED  = "#9399B2"
-ACCENT    = "#89B4FA"
-SUCCESS   = "#A6E3A1"
-WARNING   = "#F9E2AF"
-ERROR     = "#F38BA8"
+# ─────────────────────────────────────────────────────────────────────────────
+class AplicacaoNavegacao:
 
+    def __init__(self):
+        pygame.mixer.pre_init(44100, -16, 2, 512)
+        pygame.init()
+        self._larg, self._alt = LARG_JANELA, ALT_JANELA
+        self._tela_cheia = False
+        self.tela  = pygame.display.set_mode((LARG_JANELA, ALT_JANELA), pygame.RESIZABLE)
+        pygame.display.set_caption("Trabalho de IA 1")
+        self.relogio = pygame.time.Clock()
+        self._audio  = GerenciadorAudio()
 
-class NavigationApp:
-    """
-    Janela principal da aplicação de navegação por algoritmos de busca.
-    Gerencia o ciclo: construir mapa → selecionar algoritmo → buscar → animar.
-    """
+        # fontes
+        self.f_titulo    = pygame.font.Font(CAMINHO_FONT, 16)
+        self.f_principal = pygame.font.Font(CAMINHO_FONT, 12)
+        self.f_pequena   = pygame.font.Font(CAMINHO_FONT, 10)
+        self.f_mono      = pygame.font.SysFont("monospace", 14)
+        self.f_coord     = pygame.font.SysFont("monospace", 12, bold=True)
 
-    def __init__(self, root: tk.Tk) -> None:
-        self.root = root
-        self.root.title("🧭  Navegação com Algoritmos de Busca")
-        self.root.configure(bg=BG_APP)
-        self.root.resizable(True, True)
+        # tiles pixel art e overlays
+        self._cache_tiles: dict = {}
+        self._tiles = {k: self._carregar_tile(v) for k, v in TILES.items()}
+        self._ov_visitado  = self._criar_overlay((148,  0, 211), 135)
+        self._ov_caminho   = self._criar_overlay((255, 20, 147), 150)
+        self._ov_inicio    = self._criar_overlay(( 50, 50, 200),  80)
+        self._ov_objetivo  = self._criar_overlay((220, 180,   0),  80)
 
-        self.graph = Graph()
-        self.graph.build_from_map()
+        # grafo e estado da busca
+        self.grafo = Grafo()
+        self.grafo.construir_do_mapa()
 
-        self._result: Optional[SearchResult] = None
-        self._anim_job: Optional[str] = None
-        self._agent_pos: Optional[Node] = None
-        self._collected_rewards: int = 0
-        self._running: bool = False
+        self._resultado:  Optional[ResultadoBusca] = None
+        self._pendente:   Optional[ResultadoBusca] = None
+        self._pronto:     bool = False
+        self._executando: bool = False
+        self._status:     str  = "Selecione o algoritmo e pressione BUSCAR."
 
-        self._build_layout()
-        self._draw_grid()
-        self._update_vertex_count()
+        # animacao
+        self._estado_anim    = "ocioso"
+        self._anim_visitados: List[No] = []
+        self._anim_caminho:   List[No] = []
+        self._anim_idx    = 0
+        self._anim_ts     = 0
+        self._coletado    = 0
+        self._destaque:   dict = {}   # id(no) -> overlay
 
-    # ── Layout principal ────────────────────────────────────────────────────
+        # selecao de algoritmo e heuristica
+        self._idx_algo = 3   # A* por padrao
+        self._idx_heur = 0   # Manhattan por padrao
+        self._btn_hover = None
 
-    def _build_layout(self) -> None:
-        """Cria o layout principal: painel esquerdo de controles + canvas central."""
+        # rects populados no primeiro _desenhar_painel()
+        self._rects_botao  = {}
+        self._rect_algo    = pygame.Rect(0, 0, 0, 0)
+        self._rect_heur    = pygame.Rect(0, 0, 0, 0)
 
-        # Frame esquerdo: controles + métricas
-        left = tk.Frame(self.root, bg=BG_APP, width=240)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=(12, 6), pady=12)
-        left.pack_propagate(False)
+        # campo de texto para destino
+        self._entrada_destino = EntradaTexto(10, 0, LARG_PAINEL - 20, 28, "linha,col")
+        self._entrada_destino.definir_fonte(self.f_pequena)
 
-        self._build_controls(left)
-        self._build_legend(left)
-        self._build_metrics_panel(left)
+        self._recalcular_grade()
 
-        # Frame central: canvas do grid
-        center = tk.Frame(self.root, bg=BG_APP)
-        center.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=12, padx=(0, 12))
+    # ── tiles e overlays ──────────────────────────────────────────────────────
 
-        self._build_canvas(center)
-        self._build_status_bar(center)
+    def _carregar_tile(self, id_tile: int) -> pygame.Surface:
+        if id_tile in self._cache_tiles:
+            return self._cache_tiles[id_tile]
+        caminho = os.path.join(DIR_TILES, f'tile_{id_tile:04d}.png')
+        bruto   = pygame.image.load(caminho).convert_alpha()
+        escalado = pygame.transform.scale(bruto, (TAM_TILE, TAM_TILE))
+        self._cache_tiles[id_tile] = escalado
+        return escalado
 
-    def _build_controls(self, parent: tk.Frame) -> None:
-        """Seção de controles: título, algoritmo, botões de ação."""
-        card = self._card(parent, "⚙️  Controles")
+    def _criar_overlay(self, rgb, alfa) -> pygame.Surface:
+        s = pygame.Surface((TAM_TILE, TAM_TILE), pygame.SRCALPHA)
+        s.fill((*rgb, alfa))
+        return s
 
-        # Seletor de algoritmo
-        tk.Label(card, text="Algoritmo:", bg=BG_CARD, fg=FG_MUTED,
-                 font=FONT_MAIN).pack(anchor="w", padx=8, pady=(4, 0))
+    def _recalcular_grade(self):
+        colunas = self.grafo.colunas
+        linhas  = self.grafo.linhas
+        area_larg = self._larg - LARG_PAINEL
+        area_alt  = self._alt  - ALT_TOPO - ALT_STATUS
+        self._gx = (area_larg - colunas * TAM_TILE) // 2
+        self._gy = ALT_TOPO + (area_alt - linhas * TAM_TILE) // 2
+        self._px = self._larg - LARG_PAINEL   # borda esquerda do painel
 
-        self._algo_var = tk.StringVar(value="A* (A estrela)")
-        combo = ttk.Combobox(card, textvariable=self._algo_var,
-                             values=list(ALGORITHMS.keys()),
-                             state="readonly", font=FONT_MAIN)
-        combo.pack(fill=tk.X, padx=8, pady=4)
-
-        # Heurística (somente informativa para BFS/DFS, ativa para Greedy/A*)
-        tk.Label(card, text="Heurística:", bg=BG_CARD, fg=FG_MUTED,
-                 font=FONT_MAIN).pack(anchor="w", padx=8, pady=(4, 0))
-
-        self._heur_var = tk.StringVar(value="Manhattan")
-        heur_combo = ttk.Combobox(card, textvariable=self._heur_var,
-                                  values=["Manhattan", "Euclidiana", "Ajuste p/ recompensas"],
-                                  state="readonly", font=FONT_MAIN)
-        heur_combo.pack(fill=tk.X, padx=8, pady=4)
-
-        # Botões
-        btn_cfg = dict(font=FONT_BOLD, relief="flat", cursor="hand2",
-                       padx=6, pady=6, bd=0)
-
-        self._btn_search = tk.Button(
-            card, text="▶  Iniciar Busca",
-            bg=ACCENT, fg=BG_APP,
-            command=self._start_search, **btn_cfg)
-        self._btn_search.pack(fill=tk.X, padx=8, pady=(8, 3))
-
-        tk.Button(card, text="🔀  Mapa Aleatório",
-                  bg=BG_PANEL, fg=FG_TEXT,
-                  command=self._random_map, **btn_cfg).pack(fill=tk.X, padx=8, pady=3)
-
-        tk.Button(card, text="↺  Resetar",
-                  bg=BG_PANEL, fg=FG_TEXT,
-                  command=self._reset, **btn_cfg).pack(fill=tk.X, padx=8, pady=(3, 8))
-
-        self._vertex_lbl = tk.Label(card, text="", bg=BG_CARD,
-                                    fg=FG_MUTED, font=("Segoe UI", 8))
-        self._vertex_lbl.pack(pady=(0, 6))
-
-    def _build_legend(self, parent: tk.Frame) -> None:
-        """Legenda de terrenos e elementos do mapa."""
-        card = self._card(parent, "🗺️  Legenda")
-
-        items = [
-            (Terrain.PLAIN.color, "Plano (custo 1)"),
-            (Terrain.SANDY.color, "Arenoso (custo 4)"),
-            (Terrain.ROCKY.color, "Rochoso (custo 10)"),
-            (Terrain.SWAMP.color, "Pântano (custo 20)"),
-            (Terrain.WALL.color,  "Parede (intransponível)"),
-            (ELEMENT_COLORS["goal"],    "🏆 Objetivo"),
-            (ELEMENT_COLORS["reward"],  "💎 Recompensa"),
-            (ELEMENT_COLORS["path"],    "Caminho encontrado"),
-            (ELEMENT_COLORS["visited"], "Nós explorados"),
-        ]
-
-        for color, label in items:
-            row = tk.Frame(card, bg=BG_CARD)
-            row.pack(fill=tk.X, padx=8, pady=1)
-            swatch = tk.Frame(row, bg=color, width=16, height=16, relief="flat")
-            swatch.pack(side=tk.LEFT, padx=(0, 6))
-            tk.Label(row, text=label, bg=BG_CARD, fg=FG_TEXT,
-                     font=("Segoe UI", 8)).pack(side=tk.LEFT)
-
-    def _build_metrics_panel(self, parent: tk.Frame) -> None:
-        """Painel de métricas: exibe resultados após a busca."""
-        card = self._card(parent, "📊  Métricas")
-
-        self._metrics_text = tk.Text(
-            card, height=12, font=FONT_MONO,
-            bg=BG_APP, fg=FG_TEXT, relief="flat",
-            state="disabled", wrap="word",
-            padx=6, pady=4)
-        self._metrics_text.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
-
-        self._set_metrics("Aguardando execução...\n\nSelecione um algoritmo\ne clique em Iniciar Busca.")
-
-    def _build_canvas(self, parent: tk.Frame) -> None:
-        """Canvas principal onde o grid é desenhado."""
-        frame = tk.Frame(parent, bg=BG_PANEL, relief="flat", bd=1)
-        frame.pack(fill=tk.BOTH, expand=True)
-
-        canvas_w = self.graph.cols * CELL_SIZE
-        canvas_h = self.graph.rows * CELL_SIZE
-
-        self._canvas = tk.Canvas(
-            frame, width=canvas_w, height=canvas_h,
-            bg=BG_APP, highlightthickness=0)
-        self._canvas.pack(padx=8, pady=8)
-
-        # Scrollbars para mapas grandes
-        hbar = tk.Scrollbar(parent, orient=tk.HORIZONTAL, command=self._canvas.xview)
-        vbar = tk.Scrollbar(parent, orient=tk.VERTICAL, command=self._canvas.yview)
-        self._canvas.configure(xscrollcommand=hbar.set, yscrollcommand=vbar.set,
-                               scrollregion=(0, 0, canvas_w, canvas_h))
-
-    def _build_status_bar(self, parent: tk.Frame) -> None:
-        """Barra de status na parte inferior."""
-        self._status_var = tk.StringVar(value="Pronto — selecione um algoritmo e inicie a busca.")
-        bar = tk.Label(parent, textvariable=self._status_var,
-                       bg=BG_PANEL, fg=FG_MUTED, font=("Segoe UI", 9),
-                       anchor="w", padx=8, pady=4)
-        bar.pack(fill=tk.X, pady=(4, 0))
-
-    def _card(self, parent: tk.Frame, title: str) -> tk.Frame:
-        """Cria um card com título e retorna o frame interno."""
-        outer = tk.Frame(parent, bg=BG_CARD, relief="flat", bd=0)
-        outer.pack(fill=tk.X, pady=(0, 8))
-
-        tk.Label(outer, text=title, bg=BG_CARD, fg=ACCENT,
-                 font=FONT_BOLD, anchor="w").pack(fill=tk.X, padx=8, pady=(8, 4))
-
-        sep = tk.Frame(outer, bg=BG_PANEL, height=1)
-        sep.pack(fill=tk.X, padx=8, pady=(0, 6))
-
-        return outer
-
-    # ── Renderização do grid ────────────────────────────────────────────────
-
-    def _draw_grid(self) -> None:
-        """Renderiza o grid completo a partir do estado atual do grafo."""
-        self._canvas.delete("all")
-        for row in self.graph.nodes:
-            for node in row:
-                self._draw_cell(node)
-
-    def _draw_cell(self, node: Node,
-                   override_color: Optional[str] = None,
-                   tag: Optional[str] = None) -> None:
-        """Desenha uma única célula no canvas."""
-        x0 = node.col * CELL_SIZE + CELL_PAD
-        y0 = node.row * CELL_SIZE + CELL_PAD
-        x1 = x0 + CELL_SIZE - CELL_PAD * 2
-        y1 = y0 + CELL_SIZE - CELL_PAD * 2
-
-        # Cor da célula
-        if override_color:
-            color = override_color
-        elif node.is_goal:
-            color = ELEMENT_COLORS["goal"]
-        elif node.is_start:
-            color = ELEMENT_COLORS["agent"]
+    def _alternar_tela_cheia(self):
+        self._tela_cheia = not self._tela_cheia
+        if self._tela_cheia:
+            info = pygame.display.Info()
+            self._larg, self._alt = info.current_w, info.current_h
+            self.tela = pygame.display.set_mode(
+                (self._larg, self._alt), pygame.FULLSCREEN)
         else:
-            color = node.terrain.color
+            self._larg, self._alt = LARG_JANELA, ALT_JANELA
+            self.tela = pygame.display.set_mode(
+                (self._larg, self._alt), pygame.RESIZABLE)
+        self._recalcular_grade()
 
-        radius = 6
-        self._rounded_rect(x0, y0, x1, y1, radius, fill=color, outline="", tags=tag or "")
+    # ── loop principal ────────────────────────────────────────────────────────
 
-        # Ícone central
-        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    def executar(self):
+        while True:
+            self.relogio.tick(60)
+            for evento in pygame.event.get():
+                if evento.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                self._processar_evento(evento)
+            self._atualizar()
+            self._desenhar()
+            pygame.display.flip()
 
-        if node.is_start:
-            self._canvas.create_text(cx, cy - 6, text="🤖", font=("Segoe UI", 16), tags=tag or "")
-            self._canvas.create_text(cx, cy + 10, text="INÍCIO", font=("Segoe UI", 6, "bold"),
-                                     fill=BG_APP, tags=tag or "")
-        elif node.is_goal:
-            self._canvas.create_text(cx, cy - 6, text="🏆", font=("Segoe UI", 16), tags=tag or "")
-            self._canvas.create_text(cx, cy + 10, text="OBJETIVO", font=("Segoe UI", 6, "bold"),
-                                     fill=BG_APP, tags=tag or "")
-        elif node.terrain == Terrain.WALL:
-            self._canvas.create_text(cx, cy, text="█", font=("Segoe UI", 18),
-                                     fill="#111", tags=tag or "")
-        else:
-            # Ícone do terreno
-            icons = {Terrain.PLAIN: "🌿", Terrain.SANDY: "🏜",
-                     Terrain.ROCKY: "⛰", Terrain.SWAMP: "🌊"}
-            icon = icons.get(node.terrain, "")
-            self._canvas.create_text(cx, cy - 8, text=icon,
-                                     font=("Segoe UI", 14), tags=tag or "")
+    # ── eventos ───────────────────────────────────────────────────────────────
 
-            # Custo do terreno
-            self._canvas.create_text(cx, cy + 10, text=f"c:{node.terrain.cost}",
-                                     font=("Segoe UI", 7), fill="#555", tags=tag or "")
+    def _processar_evento(self, evento):
+        mx, my = pygame.mouse.get_pos()
+        self._btn_hover = None
 
-            # Recompensa
-            if node.has_reward():
-                self._canvas.create_text(cx + 18, cy - 18, text="💎",
-                                         font=("Segoe UI", 11), tags=tag or "")
-                self._canvas.create_text(cx + 18, cy - 4, text=f"+{node.reward}",
-                                         font=("Segoe UI", 7, "bold"),
-                                         fill=ELEMENT_COLORS["reward"], tags=tag or "")
+        # atalhos de teclado
+        if evento.type == pygame.KEYDOWN and not self._entrada_destino.ativo:
+            if evento.key == pygame.K_F11:
+                self._alternar_tela_cheia()
+            if evento.key == pygame.K_m:
+                self._audio.alternar_mudo()
 
-        # Coordenadas discretas (canto superior esquerdo)
-        self._canvas.create_text(x0 + 5, y0 + 5, text=f"{node.row},{node.col}",
-                                 anchor="nw", font=("Segoe UI", 6),
-                                 fill="#888", tags=tag or "")
+        # redimensionamento de janela
+        if evento.type == pygame.VIDEORESIZE and not self._tela_cheia:
+            self._larg, self._alt = evento.w, evento.h
+            self.tela = pygame.display.set_mode(
+                (self._larg, self._alt), pygame.RESIZABLE)
+            self._recalcular_grade()
 
-    def _rounded_rect(self, x0, y0, x1, y1, r, **kwargs):
-        """Desenha um retângulo com cantos arredondados no canvas."""
-        pts = [
-            x0+r, y0,   x1-r, y0,
-            x1,   y0,   x1,   y0+r,
-            x1,   y1-r, x1,   y1,
-            x1-r, y1,   x0+r, y1,
-            x0,   y1,   x0,   y1-r,
-            x0,   y0+r, x0,   y0,
-            x0+r, y0,
-        ]
-        return self._canvas.create_polygon(pts, smooth=True, **kwargs)
+        # campo de destino
+        if self._entrada_destino.processar_evento(evento):
+            self._aplicar_destino()
 
-    # ── Ações do usuário ────────────────────────────────────────────────────
+        if evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1:
+            for nome, rect in self._rects_botao.items():
+                if rect.collidepoint(mx, my):
+                    self._audio.reproduzir('clique')
+                    self._ao_clicar(nome)
+                    return
+            if self._rect_algo.collidepoint(mx, my):
+                self._idx_algo = (self._idx_algo + 1) % len(LISTA_ALGORITMOS)
+                self._audio.reproduzir('clique')
+            if self._rect_heur.collidepoint(mx, my):
+                self._idx_heur = (self._idx_heur + 1) % len(LISTA_HEURISTICAS)
+                self._audio.reproduzir('clique')
 
-    def _start_search(self) -> None:
-        """Executa o algoritmo selecionado e inicia a animação."""
-        if self._running:
+        if evento.type == pygame.MOUSEMOTION:
+            for nome, rect in self._rects_botao.items():
+                if rect.collidepoint(mx, my):
+                    self._btn_hover = nome
+
+    def _ao_clicar(self, nome):
+        if nome == 'buscar':
+            self._iniciar_busca()
+        elif nome == 'aleatorio':
+            self._mapa_aleatorio()
+        elif nome == 'resetar':
+            self._resetar()
+
+    def _aplicar_destino(self):
+        bruto = self._entrada_destino.texto.strip()
+        try:
+            partes = bruto.split(",")
+            linha, coluna = int(partes[0]), int(partes[1])
+            self._definir_objetivo(linha, coluna)
+            self._entrada_destino.texto = ""
+        except Exception:
+            self._status = "Formato invalido. Use  linha,col  (ex: 3,7)"
+
+    def _definir_objetivo(self, linha: int, coluna: int):
+        no = self.grafo.obter_no(linha, coluna)
+        if no is None:
+            self._status = f"({linha},{coluna}) esta fora do mapa!"
             return
+        if not no.eh_transitavel():
+            self._status = f"({linha},{coluna}) e uma parede — escolha outra celula."
+            return
+        if no.eh_inicio:
+            self._status = "Destino nao pode ser o ponto de inicio!"
+            return
+        if self.grafo.no_objetivo:
+            self.grafo.no_objetivo.eh_objetivo = False
+        no.eh_objetivo       = True
+        self.grafo.no_objetivo = no
+        self._destaque    = {}
+        self._estado_anim = "ocioso"
+        self._resultado   = None
+        self._status = f"Destino definido: ({linha},{coluna}) — pronto para buscar."
 
-        self._cancel_animation()
-        self._draw_grid()
-        self._collected_rewards = 0
+    # ── busca ─────────────────────────────────────────────────────────────────
 
-        algo_key = ALGORITHMS.get(self._algo_var.get(), "astar")
-        heuristic = self._get_heuristic()
+    def _iniciar_busca(self):
+        if self._executando:
+            return
+        self._destaque    = {}
+        self._coletado    = 0
+        self._resultado   = None
+        self._pronto      = False
+        self._estado_anim = "ocioso"
+        self._executando  = True
+        self._status      = "Executando busca..."
+        self._audio.reproduzir('iniciar')
 
-        algorithm_map = {
-            "bfs": BFS(self.graph),
-            "dfs": DFS(self.graph),
-            "greedy": Greedy(self.graph, heuristic),
-            "astar": AStar(self.graph, heuristic),
+        heuristica = self._obter_heuristica()
+        algoritmos = {
+            "BFS (Largura)":      BuscaLargura(self.grafo),
+            "DFS (Profundidade)": BuscaProfundidade(self.grafo),
+            "Greedy (Gulosa)":    BuscaGulosa(self.grafo, heuristica),
+            "A* (A estrela)":     BuscaAEstrela(self.grafo, heuristica),
         }
+        algo = algoritmos[LISTA_ALGORITMOS[self._idx_algo]]
 
-        algo = algorithm_map[algo_key]
+        def executar_busca():
+            resultado      = algo.buscar(self.grafo.no_inicial, self.grafo.no_objetivo)
+            self._pendente = resultado
+            self._pronto   = True
 
-        self._status("⏳ Executando busca...")
-        self._btn_search.config(state="disabled")
-        self._running = True
+        threading.Thread(target=executar_busca, daemon=True).start()
 
-        def run():
-            start = time.perf_counter()
-
-            result = algo.search(
-                self.graph.start_node,
-                self.graph.goal_node
-            )
-
-            end = time.perf_counter()
-            result.elapsed_ms = (end - start) * 1000
-
-            self.root.after(0, lambda: self._on_search_complete(result))
-
-        threading.Thread(target=run, daemon=True).start()
-
-    def _get_heuristic(self):
-        """Retorna a função de heurística selecionada."""
-        choice = self._heur_var.get()
-        if choice == "Euclidiana":
-            from utils.heuristics import euclidean
-            return euclidean
-        elif choice == "Ajuste p/ recompensas":
-            return reward_adjusted
+    def _obter_heuristica(self):
+        if self._idx_heur == 1:
+            return euclidiana
+        if self._idx_heur == 2:
+            return criar_heuristica_proxima(self.grafo)
         return manhattan
 
-    def _on_search_complete(self, result: SearchResult) -> None:
-        """Chamado quando a busca termina — inicia a animação."""
-        self._result = result
-        self._update_metrics(result)
+    # ── atualizacao ───────────────────────────────────────────────────────────
 
-        if not result.found:
-            self._status(f"❌ {result.message}")
-            self._btn_search.config(state="normal")
-            self._running = False
-            messagebox.showwarning("Busca", result.message)
+    def _atualizar(self):
+        if self._pronto:
+            self._pronto      = False
+            self._resultado   = self._pendente
+            self._executando  = False
+            resultado = self._resultado
+
+            if not resultado.encontrado:
+                self._status = f"SEM CAMINHO! {resultado.mensagem}"
+                self._audio.reproduzir('erro')
+                return
+
+            conjunto_caminho = set(id(n) for n in resultado.caminho)
+            self._anim_visitados = [
+                n for n in resultado.nos_visitados
+                if not n.eh_inicio and not n.eh_objetivo and id(n) not in conjunto_caminho
+            ]
+            self._anim_caminho = resultado.caminho[:]
+            self._anim_idx     = 0
+            self._anim_ts      = pygame.time.get_ticks()
+            self._estado_anim  = "visitando"
+            self._status       = f"Explorando mapa... ({len(resultado.caminho)} passos no caminho)"
+
+        agora = pygame.time.get_ticks()
+
+        if self._estado_anim == "visitando":
+            if agora - self._anim_ts >= MS_VISITA:
+                self._anim_ts = agora
+                if self._anim_idx < len(self._anim_visitados):
+                    no = self._anim_visitados[self._anim_idx]
+                    self._destaque[id(no)] = self._ov_visitado
+                    self._anim_idx += 1
+                else:
+                    for no in self._anim_caminho:
+                        if not no.eh_inicio and not no.eh_objetivo:
+                            self._destaque[id(no)] = self._ov_caminho
+                    self._anim_idx    = 0
+                    self._anim_ts     = agora
+                    self._estado_anim = "movendo"
+                    self._status      = "Agente em movimento!"
+
+        elif self._estado_anim == "movendo":
+            if agora - self._anim_ts >= MS_PASSO:
+                self._anim_ts = agora
+                if self._anim_idx < len(self._anim_caminho):
+                    no = self._anim_caminho[self._anim_idx]
+                    if no.tem_recompensa():
+                        self._coletado += no.recompensa
+                        self.grafo.coletar_recompensa(no)
+                        self._audio.reproduzir('recompensa')
+                    else:
+                        self._audio.reproduzir('passo')
+                    self._status = (
+                        f"Passo {self._anim_idx + 1}/{len(self._anim_caminho)}"
+                        f"   Recompensas: +{self._coletado}"
+                    )
+                    self._anim_idx += 1
+                else:
+                    self._estado_anim = "concluido"
+                    self._status = f"* OBJETIVO ALCANCADO! *  Recompensas: +{self._coletado}"
+                    self._audio.reproduzir('vitoria')
+
+    # ── desenho ───────────────────────────────────────────────────────────────
+
+    def _desenhar(self):
+        self.tela.fill(C_FUNDO)
+        self._desenhar_barra_topo()
+        self._desenhar_painel()
+        self._desenhar_grade()
+        self._desenhar_status()
+
+    # ── barra de topo ─────────────────────────────────────────────────────────
+
+    def _desenhar_barra_topo(self):
+        larg = self._larg
+        pygame.draw.rect(self.tela, C_PAINEL, (0, 0, larg, ALT_TOPO))
+        pygame.draw.line(self.tela, C_OURO, (0, ALT_TOPO - 1), (larg, ALT_TOPO - 1), 2)
+
+        # titulo centralizado na area do mapa
+        cx = (larg - LARG_PAINEL) // 2
+        t1 = self.f_titulo.render("DUNGEONS", True, C_OURO2)
+        t2 = self.f_titulo.render("OF KOTLIN", True, C_OURO)
+        self._texto_rpg(self.f_titulo, "DUNGEONS",  (cx - t1.get_width() // 2, 6),  C_OURO2)
+        self._texto_rpg(self.f_titulo, "OF KOTLIN", (cx - t2.get_width() // 2, 28), C_OURO)
+
+        # indicadores: mute e fullscreen
+        cor_mudo = C_VERM if self._audio.mudo else C_OPACO
+        t_mudo   = self.f_pequena.render("[M] MUDO" if self._audio.mudo else "[M] musica on", True, cor_mudo)
+        self.tela.blit(t_mudo, (larg - LARG_PAINEL - t_mudo.get_width() - 16, 10))
+
+        t_f11 = self.f_pequena.render(
+            "[F11] tela cheia" if not self._tela_cheia else "[F11] janela", True, C_OPACO)
+        self.tela.blit(t_f11, (larg - LARG_PAINEL - t_f11.get_width() - 16, 24))
+
+    # ── painel direito ────────────────────────────────────────────────────────
+
+    def _desenhar_painel(self):
+        px  = self._px
+        pw  = LARG_PAINEL - 20
+        x   = px + 10
+        alt = self._alt
+
+        # fundo com textura de pedra
+        pygame.draw.rect(self.tela, C_PAINEL,
+                         (px, ALT_TOPO, LARG_PAINEL, alt - ALT_TOPO - ALT_STATUS))
+        tile_parede = self._tiles['parede']
+        for l in range((alt - ALT_TOPO) // TAM_TILE + 1):
+            for c in range(LARG_PAINEL // TAM_TILE + 1):
+                tmp = tile_parede.copy()
+                tmp.set_alpha(35)
+                self.tela.blit(tmp, (px + c * TAM_TILE, ALT_TOPO + l * TAM_TILE))
+        pygame.draw.line(self.tela, C_OURO, (px, ALT_TOPO), (px, alt - ALT_STATUS), 2)
+
+        y = ALT_TOPO + 12
+
+        # seletores
+        y = self._desenhar_seletor(x, y, pw, "ALGORITMO",  LISTA_ALGORITMOS,  self._idx_algo, '_rect_algo')
+        y += 6
+        y = self._desenhar_seletor(x, y, pw, "HEURISTICA", LISTA_HEURISTICAS, self._idx_heur, '_rect_heur')
+        y += 8
+
+        # campo de destino
+        lbl = self.f_pequena.render("DESTINO (Enter p/ confirmar)", True, C_OURO)
+        self.tela.blit(lbl, (x, y)); y += 17
+        self._entrada_destino.rect.x = x
+        self._entrada_destino.rect.y = y
+        self._entrada_destino.rect.w = pw
+        self._entrada_destino.desenhar(self.tela)
+        objetivo = self.grafo.no_objetivo
+        if objetivo:
+            dica = self.f_pequena.render(f"atual: {objetivo.linha},{objetivo.coluna}", True, C_OPACO)
+            self.tela.blit(dica, (x + pw - dica.get_width(), y + 7))
+        y += 36
+
+        pygame.draw.line(self.tela, C_OURO, (x, y), (x + pw, y)); y += 12
+
+        # botoes: BUSCAR (destaque) + ALEATORIO | RESETAR lado a lado
+        self._rects_botao = {}
+
+        rect_buscar = pygame.Rect(x, y, pw, 34)
+        self._rects_botao['buscar'] = rect_buscar
+        hover_b = (self._btn_hover == 'buscar')
+        pygame.draw.rect(self.tela, (40, 35, 10) if hover_b else C_ESCURO, rect_buscar, border_radius=3)
+        pygame.draw.rect(self.tela, C_OURO2 if hover_b else C_OURO, rect_buscar, 1, border_radius=3)
+        lbl = self.f_principal.render("BUSCAR", True, C_OURO2 if hover_b else C_OURO)
+        self.tela.blit(lbl, lbl.get_rect(center=rect_buscar.center))
+        y += 42
+
+        metade = (pw - 6) // 2
+        for i, (rotulo, chave) in enumerate([("ALEATORIO", "aleatorio"), ("RESETAR", "resetar")]):
+            rx   = x + i * (metade + 6)
+            rect = pygame.Rect(rx, y, metade, 28)
+            self._rects_botao[chave] = rect
+            hover = (self._btn_hover == chave)
+            pygame.draw.rect(self.tela, (20, 18, 35) if hover else C_ESCURO, rect, border_radius=3)
+            pygame.draw.rect(self.tela, C_OURO if hover else C_OPACO, rect, 1, border_radius=3)
+            lbl = self.f_pequena.render(rotulo, True, C_OURO if hover else C_OPACO)
+            self.tela.blit(lbl, lbl.get_rect(center=rect.center))
+        y += 36
+
+        pygame.draw.line(self.tela, C_OURO, (x, y), (x + pw, y)); y += 10
+
+        # legenda de terrenos
+        lbl = self.f_pequena.render("TERRENOS", True, C_OURO)
+        self.tela.blit(lbl, (x, y)); y += 18
+
+        legenda = [
+            ('plano',      "Plano   custo 1"),
+            ('arenoso',    "Arenoso custo 4"),
+            ('rochoso',    "Rochoso custo 10"),
+            ('pantano',    "Pantano custo 20"),
+            ('parede',     "Parede  bloq."),
+            ('objetivo',   "Objetivo"),
+            ('recompensa', "Recompensa"),
+        ]
+        for chave, desc in legenda:
+            mini = pygame.transform.scale(self._tiles[chave], (24, 24))
+            self.tela.blit(mini, (x, y))
+            txt = self.f_pequena.render(desc, True, C_TEXTO)
+            self.tela.blit(txt, (x + 30, y + 6))
+            y += 26
+
+        pygame.draw.line(self.tela, C_OURO, (x, y), (x + pw, y)); y += 10
+
+        # metricas
+        lbl = self.f_pequena.render("METRICAS", True, C_OURO)
+        self.tela.blit(lbl, (x, y)); y += 18
+
+        if self._resultado:
+            cor = C_VERDE if self._resultado.encontrado else C_VERM
+            for linha in self._resultado.resumo().split("\n"):
+                t = self.f_mono.render(linha, True, cor)
+                self.tela.blit(t, (x, y)); y += 17
+        else:
+            t = self.f_mono.render("Aguardando...", True, C_OPACO)
+            self.tela.blit(t, (x, y))
+
+        # rodape: contagem de vertices
+        vc = self.f_mono.render(f"Vertices: {self.grafo.contar_vertices()}", True, C_OPACO)
+        self.tela.blit(vc, (x, alt - ALT_STATUS - 22))
+
+    def _desenhar_seletor(self, x, y, larg, rotulo, opcoes, idx, attr) -> int:
+        # desenha seletor clicavel estilo RPG, retorna y apos o widget
+        lbl = self.f_pequena.render(rotulo, True, C_OURO)
+        self.tela.blit(lbl, (x, y)); y += 17
+
+        rect = pygame.Rect(x, y, larg, 28)
+        setattr(self, attr, rect)
+        pygame.draw.rect(self.tela, C_ESCURO, rect, border_radius=3)
+        pygame.draw.rect(self.tela, C_OURO,   rect, 1, border_radius=3)
+
+        val = opcoes[idx][:18]
+        txt = self.f_pequena.render(f"< {val} >", True, C_TEXTO)
+        self.tela.blit(txt, txt.get_rect(center=rect.center))
+        return y + 34
+
+    def _texto_rpg(self, fonte, texto, pos, cor):
+        # texto com sombra estilo RPG
+        sombra = fonte.render(texto, True, (0, 0, 0))
+        self.tela.blit(sombra, (pos[0] + 1, pos[1] + 1))
+        lbl = fonte.render(texto, True, cor)
+        self.tela.blit(lbl, pos)
+
+    # ── grade do mapa ─────────────────────────────────────────────────────────
+
+    def _desenhar_grade(self):
+        larg_grade = self.grafo.colunas * TAM_TILE
+        alt_grade  = self.grafo.linhas  * TAM_TILE
+        pygame.draw.rect(self.tela, C_ESCURO,
+                         (self._gx - 4, self._gy - 4, larg_grade + 8, alt_grade + 8),
+                         border_radius=4)
+        pygame.draw.rect(self.tela, C_OURO,
+                         (self._gx - 4, self._gy - 4, larg_grade + 8, alt_grade + 8),
+                         2, border_radius=4)
+
+        no_agente = None
+        if self._estado_anim in ("movendo", "concluido") and self._anim_idx > 0:
+            idx_atual = min(self._anim_idx - 1, len(self._anim_caminho) - 1)
+            no_agente = self._anim_caminho[idx_atual]
+
+        for linha in self.grafo.nos:
+            for no in linha:
+                self._desenhar_celula(no, no_agente)
+
+    def _desenhar_celula(self, no: No, no_agente: Optional[No]):
+        x = self._gx + no.coluna * TAM_TILE
+        y = self._gy + no.linha  * TAM_TILE
+
+        # tile de terreno base
+        chave_tile = {
+            Terreno.PLANO:   'plano',
+            Terreno.ARENOSO: 'arenoso',
+            Terreno.ROCHOSO: 'rochoso',
+            Terreno.PANTANO: 'pantano',
+            Terreno.PAREDE:  'parede',
+        }.get(no.terreno, 'plano')
+        self.tela.blit(self._tiles[chave_tile], (x, y))
+
+        # overlay de exploracao ou caminho
+        if id(no) in self._destaque:
+            self.tela.blit(self._destaque[id(no)], (x, y))
+
+        if no.eh_inicio:
+            self.tela.blit(self._ov_inicio, (x, y))
+            self.tela.blit(self._tiles['inicio'], (x, y))
+        elif no.eh_objetivo:
+            self.tela.blit(self._ov_objetivo, (x, y))
+            self.tela.blit(self._tiles['objetivo'], (x, y))
+        else:
+            if no.tem_recompensa():
+                self.tela.blit(self._tiles['recompensa'], (x, y))
+                txt_val  = f"+{no.recompensa}"
+                val_surf = self.f_principal.render(txt_val, True, C_OURO2)
+                bg_val   = pygame.Surface((val_surf.get_width() + 6, val_surf.get_height() + 4), pygame.SRCALPHA)
+                bg_val.fill((0, 0, 0, 170))
+                vx = x + TAM_TILE - val_surf.get_width() - 6
+                self.tela.blit(bg_val,   (vx - 2, y + 2))
+                self.tela.blit(val_surf, (vx,     y + 4))
+
+        # agente com animacao de bob
+        if no is no_agente:
+            bob = int(math.sin(pygame.time.get_ticks() * 0.008) * 3)
+            self.tela.blit(self._tiles['agente'], (x, y + bob))
+
+        # coordenada com fundo escuro e sombra para legibilidade
+        txt_coord = f"{no.linha},{no.coluna}"
+        c_surf    = self.f_coord.render(txt_coord, True, (220, 210, 170))
+        bg_coord  = pygame.Surface((c_surf.get_width() + 4, c_surf.get_height() + 2), pygame.SRCALPHA)
+        bg_coord.fill((0, 0, 0, 150))
+        self.tela.blit(bg_coord, (x + 2, y + 2))
+        self.tela.blit(c_surf,   (x + 4, y + 3))
+
+        # custo do terreno no canto inferior com o mesmo tratamento
+        if no.terreno != Terreno.PAREDE and not no.eh_inicio and not no.eh_objetivo:
+            txt_custo = f"c:{no.terreno.custo}"
+            k_surf    = self.f_coord.render(txt_custo, True, (180, 220, 180))
+            bg_custo  = pygame.Surface((k_surf.get_width() + 4, k_surf.get_height() + 2), pygame.SRCALPHA)
+            bg_custo.fill((0, 0, 0, 150))
+            cy = y + TAM_TILE - k_surf.get_height() - 4
+            self.tela.blit(bg_custo, (x + 2, cy))
+            self.tela.blit(k_surf,   (x + 4, cy + 1))
+
+    # ── barra de status ───────────────────────────────────────────────────────
+
+    def _desenhar_status(self):
+        larg, alt = self._larg, self._alt
+        barra = pygame.Rect(0, alt - ALT_STATUS, larg, ALT_STATUS)
+        pygame.draw.rect(self.tela, C_ESCURO, barra)
+        pygame.draw.line(self.tela, C_OURO, (0, alt - ALT_STATUS), (larg, alt - ALT_STATUS))
+
+        cor    = C_OURO2 if "OBJETIVO" in self._status else C_TEXTO
+        t      = self.f_principal.render(self._status[:90], True, cor)
+        sombra = self.f_principal.render(self._status[:90], True, (0, 0, 0))
+        self.tela.blit(sombra, (13, alt - ALT_STATUS + 10))
+        self.tela.blit(t,      (12, alt - ALT_STATUS + 9))
+
+    # ── acoes ─────────────────────────────────────────────────────────────────
+
+    def _mapa_aleatorio(self):
+        if self._executando:
             return
+        self.grafo.construir_aleatorio(linhas=8, colunas=8)
+        self._recalcular_grade()
+        self._destaque    = {}
+        self._estado_anim = "ocioso"
+        self._resultado   = None
+        self._status      = "Novo mapa gerado. Pressione BUSCAR."
 
-        self._status(f"✅ Caminho encontrado! Animando {len(result.path)} nós...")
-        self._animate_visited(result.visited_order, result.path)
-
-    def _animate_visited(self, visited: List[Node], path: List[Node]) -> None:
-        """Anima os nós visitados (exploração) e depois o caminho final."""
-        path_set = set(id(n) for n in path)
-        idx = [0]
-
-        def step():
-            if idx[0] < len(visited):
-                node = visited[idx[0]]
-                if not node.is_start and not node.is_goal and id(node) not in path_set:
-                    self._redraw_cell(node, ELEMENT_COLORS["visited"])
-                idx[0] += 1
-                self._anim_job = self.root.after(VISIT_DELAY, step)
-            else:
-                self._animate_path(path)
-
-        step()
-
-    def _animate_path(self, path: List[Node]) -> None:
-        """Destaca o caminho e depois anima o agente percorrendo-o."""
-        # Destaca células do caminho
-        for node in path:
-            if not node.is_start and not node.is_goal:
-                self._redraw_cell(node, ELEMENT_COLORS["path"])
-
-        self.root.after(300, lambda: self._animate_agent(path, 0))
-
-    def _animate_agent(self, path: List[Node], idx: int) -> None:
-        """Move o agente passo a passo pelo caminho."""
-        if idx >= len(path):
-            self._status(f"🎉 Concluído! Recompensas coletadas: +{self._collected_rewards}")
-            self._btn_search.config(state="normal")
-            self._running = False
+    def _resetar(self):
+        if self._executando:
             return
-
-        node = path[idx]
-
-        # Apaga posição anterior do agente (restaura cor do caminho)
-        if idx > 0:
-            prev = path[idx - 1]
-            if not prev.is_start and not prev.is_goal:
-                self._redraw_cell(prev, ELEMENT_COLORS["path"])
-
-        # Coleta recompensa ao passar pelo nó
-        if node.has_reward():
-            self._collected_rewards += node.reward
-            self.graph.collect_reward(node)
-
-        # Desenha agente na posição atual
-        self._draw_agent(node)
-        self._status(f"🤖 Passo {idx+1}/{len(path)} | "
-                     f"Recompensas: +{self._collected_rewards}")
-
-        self._anim_job = self.root.after(
-            ANIM_DELAY, lambda: self._animate_agent(path, idx + 1))
-
-    def _draw_agent(self, node: Node) -> None:
-        """Desenha o ícone do agente em um nó específico."""
-        x0 = node.col * CELL_SIZE + CELL_PAD
-        y0 = node.row * CELL_SIZE + CELL_PAD
-        x1 = x0 + CELL_SIZE - CELL_PAD * 2
-        y1 = y0 + CELL_SIZE - CELL_PAD * 2
-        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-
-        self._canvas.delete(f"agent_{node.row}_{node.col}")
-        tag = f"agent_{node.row}_{node.col}"
-
-        self._rounded_rect(x0, y0, x1, y1, 6,
-                           fill=ELEMENT_COLORS["agent"], outline="", tags=tag)
-        self._canvas.create_text(cx, cy, text="🤖",
-                                 font=("Segoe UI", 20), tags=tag)
-
-    def _redraw_cell(self, node: Node, color: str) -> None:
-        """Redesenha uma célula com cor de destaque (sem apagar o grid inteiro)."""
-        x0 = node.col * CELL_SIZE + CELL_PAD
-        y0 = node.row * CELL_SIZE + CELL_PAD
-        x1 = x0 + CELL_SIZE - CELL_PAD * 2
-        y1 = y0 + CELL_SIZE - CELL_PAD * 2
-        tag = f"cell_{node.row}_{node.col}"
-        self._canvas.delete(tag)
-        self._draw_cell(node, override_color=color, tag=tag)
-
-    def _random_map(self) -> None:
-        """Gera um mapa aleatório e redesenha o grid."""
-        self._cancel_animation()
-        self._running = False
-        self.graph.build_random(rows=8, cols=8)
-        self._resize_canvas()
-        self._draw_grid()
-        self._update_vertex_count()
-        self._set_metrics("Mapa aleatório gerado.\nClique em Iniciar Busca.")
-        self._status("🔀 Novo mapa gerado — pronto para busca.")
-        self._btn_search.config(state="normal")
-
-    def _reset(self) -> None:
-        """Reseta o mapa padrão e limpa o estado."""
-        self._cancel_animation()
-        self._running = False
-        self.graph.build_from_map()
-        self.graph.reset_rewards()
-        self._resize_canvas()
-        self._draw_grid()
-        self._update_vertex_count()
-        self._set_metrics("Mapa resetado.\nClique em Iniciar Busca.")
-        self._status("↺ Mapa padrão restaurado.")
-        self._btn_search.config(state="normal")
-
-    def _cancel_animation(self) -> None:
-        """Cancela qualquer animação em andamento."""
-        if self._anim_job:
-            self.root.after_cancel(self._anim_job)
-            self._anim_job = None
-
-    def _resize_canvas(self) -> None:
-        """Redimensiona o canvas para o novo tamanho do grafo."""
-        w = self.graph.cols * CELL_SIZE
-        h = self.graph.rows * CELL_SIZE
-        self._canvas.config(width=w, height=h,
-                            scrollregion=(0, 0, w, h))
-
-    # ── Utilitários de UI ───────────────────────────────────────────────────
-
-    def _update_metrics(self, result: SearchResult) -> None:
-        """Atualiza o painel de métricas com o SearchResult."""
-        color = SUCCESS if result.found else ERROR
-        self._set_metrics(result.summary(), color)
-
-    def _set_metrics(self, text: str, color: str = FG_TEXT) -> None:
-        """Escreve texto no painel de métricas."""
-        self._metrics_text.config(state="normal")
-        self._metrics_text.delete("1.0", tk.END)
-        self._metrics_text.insert(tk.END, text)
-        self._metrics_text.config(state="disabled", fg=color)
-
-    def _status(self, msg: str) -> None:
-        """Atualiza a barra de status inferior."""
-        self._status_var.set(msg)
-
-    def _update_vertex_count(self) -> None:
-        """Exibe o número de vértices transitáveis no mapa."""
-        count = self.graph.vertex_count()
-        self._vertex_lbl.config(text=f"Vértices transitáveis: {count}")
+        self.grafo.construir_do_mapa()
+        self.grafo.resetar_recompensas()
+        self._recalcular_grade()
+        self._destaque    = {}
+        self._estado_anim = "ocioso"
+        self._resultado   = None
+        self._status      = "Mapa resetado. Pressione BUSCAR."
